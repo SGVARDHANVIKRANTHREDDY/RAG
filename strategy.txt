@@ -1,0 +1,532 @@
+Production-grade strategy: Multi-user RAG chatbot in 14 days
+Below is a complete, order-driven plan with scope definitions, security + isolation requirements, daily tasks, and explicit trade-offs for deploying a multi-user chatbot with authentication, per-user document stores, and persistent chat history.
+
+Strategy (multi-user scope)
+What changes for multi-user vs. single-user
+For a multi-user system you must add:
+
+Authentication & authorization — User registration/login (JWT or session-based), secure endpoints, role validation.
+
+Per-user data isolation — Each user's uploaded files, FAISS indexes, chat histories, and embeddings live in isolated namespaces (user_id prefixed folders or database rows).
+
+Persistent database — Replace SQLite with PostgreSQL (multi-connection safe) for users, sessions, chat metadata, and file metadata.
+
+Session management — Frontend tracks logged-in user state (NextAuth.js or custom JWT client).
+
+Deployment security — Secure environment variables, HTTPS, CORS policies, rate limiting on public endpoints.
+
+Core architecture (multi-user, simplified)
+text
+┌─────────────────┐
+│  Next.js Client │  (NextAuth.js session)
+└────────┬────────┘
+         │ JWT / Session Cookie
+         ▼
+┌─────────────────┐
+│  FastAPI Backend│
+│  (JWT verify)   │
+└────┬────────┬───┘
+     │        │
+     ▼        ▼
+PostgreSQL   User-scoped FAISS indexes
+(users,      (uploads/{user_id}/faiss/)
+ chats,
+ files)
+     │
+     ▼
+LLM API (OpenAI / Groq / Ollama)
+Key principle: Every API endpoint extracts user_id from the authenticated token and never accesses another user's data.
+
+Clear scope for multi-user MVP (14 days)
+In-scope
+User management: Register, login, logout (email + password), JWT authentication.
+
+Per-user file uploads: PDF/DOCX/TXT → parse → chunk → embed → store in uploads/{user_id}/ and FAISS index per user.
+
+Per-user chat history: Each user's conversations stored in PostgreSQL with chat_id, messages, timestamps.
+
+RAG query isolation: Retrieve only from the logged-in user's FAISS index; no cross-user data leakage.
+
+Streaming responses: SSE endpoint with user authentication check before streaming.
+
+Voice input/output: Web Speech API (client-side, no backend changes needed).
+
+Dark/light theme + responsive UI: Tailwind + Next.js.
+
+Deployment: Vercel (frontend) + Render/Railway (backend + PostgreSQL).
+
+Out of scope (deferred or removed for 2 weeks)
+Role-based access control (RBAC) beyond simple user/admin flags.
+
+Multi-tenancy with team/workspace sharing (each user owns their own data only).
+
+Real-time collaborative editing or shared chats.
+
+OAuth providers (Google/GitHub sign-in) — stick to email/password to save time; can add later with NextAuth providers.
+
+Advanced embedding models or hybrid search (semantic + keyword).
+
+Image upload or multi-modal RAG.
+
+Tech stack (final, multi-user)
+Layer	Technology	Why
+Frontend	Next.js 14+ (App Router) + Tailwind CSS	Modern React, built-in API routes, Vercel deploy 
+Auth (Frontend)	NextAuth.js or custom JWT client	NextAuth = quick setup; custom = more control 
+Backend	FastAPI + Uvicorn	Fast, async, SSE streaming 
+Auth (Backend)	JWT (python-jose + passlib)	Stateless tokens, easy to validate per request 
+Database	PostgreSQL (Neon / Render managed)	Multi-user safe, ACID transactions 
+ORM	SQLAlchemy (async) or Prisma/Raw SQL	Type-safe queries, migrations 
+Vector store	FAISS (per-user index files)	Fast, local, easy isolation by file path 
+Embeddings	sentence-transformers or OpenAI embeddings	sentence-transformers = free, OpenAI = higher quality 
+LLM	OpenAI GPT-4o-mini API (primary) / Groq free	GPT-4o-mini = affordable, fast; Groq = free tier 
+File parsing	pdfplumber (PDF), python-docx (DOCX)	Robust text extraction 
+Streaming	FastAPI StreamingResponse (SSE)	Simple, works with EventSource in browser 
+Deployment (FE)	Vercel	Zero-config Next.js hosting
+Deployment (BE)	Render / Railway	Managed PostgreSQL + Python runtime 
+Implementation plan (14 days, ordered tasks)
+Week 1: Backend foundation + auth + RAG pipeline
+Day 1 (5–6 hrs): Project setup + database schema
+Tasks:
+
+Initialize two repos: chatbot-frontend (Next.js) and chatbot-backend (FastAPI).
+
+Set up PostgreSQL (local Docker or managed Neon/Render instance).
+
+Define schema:
+
+users table: id, email, hashed_password, created_at
+
+chats table: id, user_id, title, created_at
+
+messages table: id, chat_id, role (user/assistant), content, timestamp
+
+files table: id, user_id, filename, filepath, upload_date, index_path.
+
+Write SQLAlchemy models or Prisma schema.
+
+Test DB connection and create tables.
+
+Output: Working DB with migrations, connection string in .env.
+
+Day 2 (5–6 hrs): User registration & JWT auth (backend)
+Tasks:
+
+Install passlib[bcrypt], python-jose[cryptography], python-multipart.
+
+Create endpoints:
+
+POST /auth/register → hash password, insert user, return success.
+
+POST /auth/login → verify password, generate JWT (access token + refresh token), return tokens.
+
+POST /auth/refresh → validate refresh token, issue new access token.
+
+Write get_current_user dependency that extracts and validates JWT from Authorization: Bearer <token> header.
+
+Protect a test endpoint /protected using Depends(get_current_user).
+
+Output: Working registration, login, and token validation.
+
+Test: Use Postman/curl to register, login, call protected endpoint with token.
+
+Day 3 (6–7 hrs): File upload + parsing + per-user storage
+Tasks:
+
+Create upload endpoint POST /files/upload (requires auth).
+
+Save file to uploads/{user_id}/{filename}.
+
+Parse file:
+
+PDF → pdfplumber → extract text per page
+
+DOCX → python-docx → paragraphs
+
+TXT → read raw.
+
+Insert metadata into files table: user_id, filename, filepath.
+
+Return file ID and success message.
+
+Output: Authenticated users can upload files; files stored per user.
+
+Edge case: Validate file extensions, limit file size (e.g., 10 MB max), sanitize filenames to prevent path traversal.
+
+Day 4 (6–7 hrs): Chunking + embeddings + FAISS index per user
+Tasks:
+
+Install sentence-transformers, faiss-cpu (or faiss-gpu if available).
+
+Write chunking function: split text into ~800-token chunks with 100-token overlap.
+
+Generate embeddings using SentenceTransformer('all-MiniLM-L6-v2') or OpenAI embeddings API.
+
+Create FAISS index per user:
+
+Path: uploads/{user_id}/faiss_index.bin
+
+Metadata: uploads/{user_id}/metadata.json → map chunk id → {file_id, page, text}.
+
+On upload completion, add chunks to user's FAISS index and save to disk.
+
+Output: Each user has isolated FAISS index; chunks indexed on upload.
+
+Test: Upload two PDFs as different users; verify separate index files created.
+
+Day 5 (6–7 hrs): RAG retrieval + LLM query endpoint (non-streaming)
+Tasks:
+
+Create POST /query endpoint (requires auth).
+
+Accept {query: str, file_ids?: list, chat_id?: int}.
+
+Load user's FAISS index from disk.
+
+Retrieve top-k (k=5) relevant chunks for query.
+
+Build prompt: system instruction + retrieved chunks + user query.
+
+Call LLM (OpenAI GPT-4o-mini or Groq) with prompt; return answer + sources (file names, pages).
+
+Save user message and assistant reply to messages table.
+
+Output: Users can ask questions; backend retrieves from their docs and answers.
+
+Test: Upload doc, ask question, verify answer cites correct sources.
+
+Day 6 (5–6 hrs): Streaming responses (SSE)
+Tasks:
+
+Create GET /query/stream?query=...&chat_id=... (requires auth).
+
+Retrieve chunks, build prompt (same as Day 5).
+
+Stream LLM response using StreamingResponse or SSE library.
+
+Yield tokens as data: {token}\n\n events.
+
+Frontend will consume via EventSource or fetch stream.
+
+Output: Real-time token streaming; typing animation in UI.
+
+Edge case: Handle errors mid-stream (send error event, close stream).
+
+Day 7 (4–5 hrs): Chat history endpoints + multi-chat support
+Tasks:
+
+GET /chats → return list of user's chats (id, title, created_at).
+
+POST /chats → create new chat, return chat_id.
+
+GET /chats/{chat_id}/messages → return all messages for that chat (only if owned by user).
+
+DELETE /chats/{chat_id} → soft delete chat.
+
+Update query endpoints to accept chat_id and save messages to correct chat.
+
+Output: Users can create multiple chats, view history per chat.
+
+Week 2: Frontend + voice + polish + deploy
+Day 8 (6–7 hrs): Next.js app + authentication UI
+Tasks:
+
+Initialize Next.js 14 app with App Router, install Tailwind CSS.
+
+Option A: Use NextAuth.js with Credentials provider pointing to your FastAPI /auth/login.
+
+Configure pages/api/auth/[...nextauth].ts.
+
+Use useSession() hook in components.
+
+Option B: Custom JWT client — store token in httpOnly cookie or localStorage, attach to API calls.
+
+Create pages:
+
+/login → form → POST /auth/login → save token/session
+
+/register → form → POST /auth/register → redirect to login
+
+/chat → protected route, redirect to login if not authenticated.
+
+Output: Working login/register flow; session persists across page reloads.
+
+Day 9 (6–7 hrs): Chat interface + message bubbles + markdown
+Tasks:
+
+Build chat UI (similar to ChatGPT):
+
+Left sidebar: list of chats, "New Chat" button
+
+Main area: message bubbles (user = right, assistant = left)
+
+Input bar at bottom with Send button.
+
+Install react-markdown, rehype-highlight for markdown + code blocks.
+
+Fetch chat list from GET /chats on mount.
+
+On send, POST to /query or /query/stream, append assistant message.
+
+Render markdown in assistant bubbles.
+
+Output: Functional chat UI with markdown rendering.
+
+Day 10 (5–6 hrs): Streaming integration + typing animation
+Tasks:
+
+On message send, open SSE connection to GET /query/stream with EventSource or fetch.
+
+As tokens arrive, append to assistant message bubble (create typing cursor effect with CSS).
+
+When stream ends, mark message complete, save to state.
+
+Handle reconnection/errors gracefully.
+
+Output: Real-time streaming responses in UI.
+
+Edge case: Cancel stream if user sends new message mid-response (abort EventSource).
+
+Day 11 (5–6 hrs): File upload UI + source citations
+Tasks:
+
+Add upload button/panel in chat UI (accepts PDF/DOCX/TXT).
+
+On file select, POST to /files/upload with FormData, show progress spinner.
+
+Display uploaded files in sidebar with delete option.
+
+When assistant responds, show "Sources" section below message with file names + page numbers (from metadata).
+
+Make sources clickable to highlight original chunk (optional: preview PDF page in modal).
+
+Output: Users can upload docs, see which docs were used to answer.
+
+Day 12 (4–5 hrs): Voice input + speech output
+Tasks:
+
+Voice input:
+
+Add 🎤 button next to message input
+
+Use Web Speech API SpeechRecognition.
+
+On click, start listening → convert speech to text → populate input field → user can edit/send.
+
+Speech output:
+
+Add 🔊 button on each assistant message
+
+Use SpeechSynthesisUtterance to read message text aloud.
+
+Provide voice/rate controls (optional).
+
+Output: Voice-to-text input and text-to-speech output working in browser.
+
+Browser support note: Works best in Chrome/Edge; provide fallback message for unsupported browsers.
+
+Day 13 (5–6 hrs): Dark/light mode + UI polish
+Tasks:
+
+Implement theme toggle using Tailwind's dark: classes or a state manager (zustand/context).
+
+Persist theme preference in localStorage.
+
+Polish:
+
+Smooth animations (fade-in messages, slide-in sidebar)
+
+Responsive layout (mobile + desktop)
+
+Loading states (spinners for file upload, message send)
+
+Error toasts (react-hot-toast or similar).
+
+Add syntax highlighting for code blocks (rehype-highlight already installed).
+
+Output: Beautiful, responsive UI with dark mode.
+
+Day 14 (6–7 hrs): Deployment + final testing + documentation
+Tasks:
+
+Frontend deployment:
+
+Push to GitHub, connect to Vercel, deploy.
+
+Set environment variables (NEXTAUTH_SECRET, backend API URL).
+
+Backend deployment:
+
+Deploy FastAPI to Render/Railway.
+
+Provision PostgreSQL (Render managed DB or Neon).
+
+Set environment vars (DATABASE_URL, JWT_SECRET, OPENAI_API_KEY).
+
+Run migrations.
+
+CORS: Configure FastAPI CORS to allow requests from Vercel domain.
+
+HTTPS: Ensure both frontend and backend use HTTPS (automatic on Vercel/Render).
+
+Testing:
+
+Register multiple users, upload files as each, verify isolation.
+
+Test streaming, voice, dark mode on mobile + desktop.
+
+Documentation:
+
+Write README with architecture diagram, setup instructions, API docs.
+
+Record short demo video (2–3 min) showing all features.
+
+Output: Fully deployed, multi-user chatbot with demo link and docs.
+
+Per-user data isolation strategy (critical for multi-user)
+File storage
+Path: uploads/{user_id}/{file_id}_{filename}
+
+Each upload creates entry in files table with user_id foreign key.
+
+API endpoints check file.user_id == current_user.id before allowing access.
+
+FAISS indexes
+Path: uploads/{user_id}/faiss_index.bin and metadata.json
+
+Load/save index per user on demand (or keep in-memory cache with LRU eviction).
+
+On query, load only the requesting user's index; never mix indexes.
+
+Chat history
+chats.user_id and messages.chat_id foreign keys enforce ownership.
+
+SQL queries always include WHERE user_id = ?.
+
+Security checklist
+All FastAPI endpoints (except /auth/register, /auth/login) require Depends(get_current_user).
+
+JWT secret is strong (random 256-bit string) and stored in environment variable.
+
+Passwords hashed with bcrypt before storage.
+
+CORS restricted to frontend domain (not *).
+
+File upload validates MIME type, extension, and size.
+
+SQL queries use parameterized statements (ORM handles this).
+
+No user input directly interpolated into prompts without sanitization.
+
+Risk mitigation & trade-offs
+Risk: FAISS per-user index performance
+Problem: Loading a new FAISS index from disk per query adds latency (~100–500ms depending on size).
+
+Mitigation: Keep a cache of recently used indexes in memory (max 10–20 users). Evict least-recently-used when cache is full. For small college demo, this is sufficient.
+
+Alternative: Use a vector database like Pinecone/Weaviate/Qdrant with multi-tenant namespaces (adds complexity and external dependency; defer unless performance becomes critical).
+
+Risk: PostgreSQL connection limits
+Problem: Each FastAPI request opens a DB connection; default Postgres limit is ~100 concurrent.
+
+Mitigation: Use SQLAlchemy async connection pool with max_connections=20. Deploy backend with gunicorn/uvicorn workers = 2–4 (not 10+). Render's free tier should handle 5–10 concurrent users comfortably.
+
+Risk: LLM API rate limits & cost
+Problem: OpenAI API has rate limits (requests/min, tokens/min); costs can spike with many users.
+
+Mitigation: Implement per-user rate limiting (max 10 queries/min) using a simple in-memory counter or Redis. For demo, monitor usage and set a spending alert in OpenAI dashboard. Use GPT-4o-mini (cheapest model) or switch to free Groq/Ollama if budget is tight.
+
+Trade-off: NextAuth.js vs. custom JWT
+NextAuth.js (recommended for speed): Faster to set up, handles sessions/tokens automatically, integrates well with OAuth providers (future-proof).
+
+Custom JWT: More control over token structure and refresh logic, avoids dependency on NextAuth API routes.
+
+Decision: Use NextAuth.js with Credentials provider to save 1–2 days; custom JWT if you need fine-grained control or want to learn auth deeply.
+
+Trade-off: Real-time chat updates
+Deferred: Implementing WebSocket for live chat updates (messages appearing without refresh) adds significant complexity (socket.io, connection management, state sync). For MVP, users refresh or navigate between chats to see updates. Add in v2 if time permits.
+
+Deployment checklist (Day 14)
+Frontend (Vercel)
+Environment variables: NEXTAUTH_URL, NEXTAUTH_SECRET, NEXT_PUBLIC_API_URL
+
+Build succeeds locally with npm run build
+
+Deploy from main branch
+
+Custom domain (optional)
+
+Backend (Render/Railway)
+Environment variables: DATABASE_URL, JWT_SECRET, OPENAI_API_KEY, CORS_ORIGINS
+
+Run migrations: alembic upgrade head or equivalent
+
+Health check endpoint /health returns 200
+
+Deploy with uvicorn main:app --host 0.0.0.0 --port 8000
+
+Connect to managed PostgreSQL (Render Postgres or Neon)
+
+Database (PostgreSQL)
+Provision managed instance (Render, Neon, or Railway)
+
+Connection string added to backend env
+
+Tables created (run migrations)
+
+Test connection from backend
+
+Post-deploy tests
+Register new user → login → create chat → upload file → ask question → verify answer
+
+Test streaming responses
+
+Test voice input/output
+
+Toggle dark mode
+
+Test on mobile browser
+
+Verify per-user isolation: User A cannot see User B's files/chats
+
+Final feature matrix (what will work on Day 14)
+Feature	Status	Notes
+User registration/login	✅	JWT-based, secure password hashing 
+Per-user file uploads	✅	PDF/DOCX/TXT, isolated storage 
+RAG document Q&A	✅	Per-user FAISS index, source citations 
+Streaming responses	✅	SSE, typing animation 
+Chat history	✅	Multi-chat support, persistent in PostgreSQL 
+Voice input	✅	Web Speech API (browser-based) 
+Speech output	✅	SpeechSynthesis API 
+Dark/light theme	✅	Tailwind CSS, toggle + persistence
+Markdown + code blocks	✅	react-markdown + syntax highlight 
+Deployed (production)	✅	Vercel (FE) + Render (BE) 
+Multi-user isolation	✅	Auth + per-user namespaces 
+Documentation deliverables (for faculty review)
+README.md with:
+
+Project overview
+
+Architecture diagram (draw.io or Mermaid)
+
+Setup instructions (local + deployed)
+
+API documentation (autogenerate with FastAPI Swagger UI)
+
+Tech stack table
+
+Demo video (2–3 min):
+
+Register → upload PDF → ask questions → show sources → voice input → dark mode
+
+Code comments (minimal but clear):
+
+Docstrings for all endpoint functions
+
+Inline comments for complex logic (chunking, FAISS index management)
+
+Test coverage (optional but impressive):
+
+Unit tests for auth, chunking, retrieval (pytest)
+
+Integration test for full upload→query flow
+

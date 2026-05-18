@@ -1,0 +1,41 @@
+﻿version: '3.8'
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: chatbot
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  backend:
+    build: ./chatbot-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:dev@db:5432/chatbot
+      - CORS_ORIGINS=http://localhost:3000
+      - JWT_SECRET=supersecret12345678901234567890123
+      - LLM_MODEL=gpt-4o-mini
+    depends_on:
+      - db
+    volumes:
+      - ./chatbot-backend:/app
+
+  frontend:
+    build: ./chatbot-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+    depends_on:
+      - backend
+    volumes:
+      - ./chatbot-frontend:/app
+      - /app/node_modules
+
+volumes:
+  pgdata:

@@ -1,0 +1,86 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-backend:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        working-directory: ./chatbot-backend
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+      
+      - name: Run tests
+        working-directory: ./chatbot-backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+          JWT_SECRET: test-secret-key-for-ci
+        run: pytest tests/ -v
+
+  test-frontend:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      
+      - name: Install dependencies
+        working-directory: ./chatbot-frontend
+        run: npm ci
+      
+      - name: Run linter
+        working-directory: ./chatbot-frontend
+        run: npm run lint
+      
+      - name: Build
+        working-directory: ./chatbot-frontend
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: https://api.example.com/api/v1
+
+  deploy:
+    needs: [test-backend, test-frontend]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Deploy to Render (Backend)
+        run: echo "Backend auto-deploys via Render GitHub integration"
+      
+      - name: Deploy to Vercel (Frontend)
+        run: echo "Frontend auto-deploys via Vercel GitHub integration"
