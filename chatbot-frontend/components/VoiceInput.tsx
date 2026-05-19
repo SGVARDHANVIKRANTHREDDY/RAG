@@ -51,7 +51,7 @@ export default function VoiceInput({
   return (
     <button
       onClick={toggleListening}
-      className={`px-4 py-2 rounded-lg $\{
+      className={`px-4 py-2 rounded-lg ${
         isListening ? 'bg-red-600 hover:bg-red-700' : 'bg-purple-600 hover:bg-purple-700'
       } text-white`}
     >

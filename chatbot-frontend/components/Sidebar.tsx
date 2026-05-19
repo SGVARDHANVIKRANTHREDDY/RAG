@@ -57,7 +57,7 @@ export default function Sidebar({
           <div
             key={chat.id}
             onClick={() => onSelectChat(chat.id)}
-            className={`p-3 mb-2 rounded-lg cursor-pointer hover:bg-gray-700 flex justify-between items-center $\{
+            className={`p-3 mb-2 rounded-lg cursor-pointer hover:bg-gray-700 flex justify-between items-center ${
               currentChatId === chat.id ? 'bg-gray-700' : ''
             }`}
           >

@@ -69,11 +69,11 @@ export default function ChatInterface({
       // Stream response
       const apiUrl = process.env.NEXT_PUBLIC_API_URL?.replace('/api/v1', '');
       const token = localStorage.getItem('access_token');
-      const url = `$\{apiUrl}/api/v1/query/stream?query=$\{encodeURIComponent(userMessage)}$\{chatId ? `&chat_id=$\{chatId}` : ''}`;
+      const url = `${apiUrl}/api/v1/query/stream?query=${encodeURIComponent(userMessage)}${chatId ? `&chat_id=${chatId}` : ''}`;
 
       const response = await fetch(url, {
         headers: {
-          'Authorization': `Bearer $\{token}`,
+          'Authorization': `Bearer ${token}`,
         },
       });
 

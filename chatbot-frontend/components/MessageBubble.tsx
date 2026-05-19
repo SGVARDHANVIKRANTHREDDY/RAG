@@ -19,9 +19,9 @@ export default function MessageBubble({
   const isUser = message.role === 'user';
 
   return (
-    <div className={`flex $\{isUser ? 'justify-end' : 'justify-start'}`}>
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div
-        className={`max-w-3xl rounded-lg p-4 $\{
+        className={`max-w-3xl rounded-lg p-4 ${
           isUser
             ? 'bg-blue-600 text-white'
             : 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100'

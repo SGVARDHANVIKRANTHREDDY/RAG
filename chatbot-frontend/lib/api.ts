@@ -5,9 +5,11 @@ const api = axios.create({
 });
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('access_token');
-  if (token) {
-    config.headers.Authorization = `Bearer $\{token}`;
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem('access_token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
   }
   return config;
 });
@@ -15,30 +17,30 @@ api.interceptors.request.use((config) => {
 export default api;
 
 export const authAPI = {
-  register: (email: string, password: string) => 
+  register: (email: string, password: string) =>
     api.post('/auth/register', { email, password }),
-  login: (email: string, password: string) => 
+  login: (email: string, password: string) =>
     api.post('/auth/login', { email, password }),
 };
 
 export const chatAPI = {
   listChats: () => api.get('/chats'),
   createChat: (title: string) => api.post('/chats', { title }),
-  getMessages: (chatId: number) => api.get(`/chats/$\{chatId}/messages`),
-  deleteChat: (chatId: number) => api.delete(`/chats/$\{chatId}`),
+  getMessages: (chatId: number) => api.get(`/chats/${chatId}/messages`),
+  deleteChat: (chatId: number) => api.delete(`/chats/${chatId}`),
 };
 
 export const fileAPI = {
-  upload: (file: File) => {
+  upload: (file: globalThis.File) => {
     const formData = new FormData();
     formData.append('file', file);
     return api.post('/files/upload', formData);
   },
   list: () => api.get('/files'),
-  delete: (fileId: number) => api.delete(`/files/$\{fileId}`),
+  delete: (fileId: number) => api.delete(`/files/${fileId}`),
 };
 
 export const queryAPI = {
-  query: (query: string, chatId?: number) => 
+  query: (query: string, chatId?: number) =>
     api.post('/query', { query, chat_id: chatId }),
 };
