@@ -6,8 +6,15 @@ import ChatInterface from '@/components/ChatInterface';
 import Sidebar from '@/components/Sidebar';
 import { chatAPI } from '@/lib/api';
 
+interface Chat {
+  id: number;
+  title: string;
+  created_at: string;
+  space_id?: string;
+}
+
 export default function ChatPage() {
-  const [chats, setChats] = useState([]);
+  const [chats, setChats] = useState<Chat[]>([]);
   const [currentChatId, setCurrentChatId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
@@ -61,7 +68,11 @@ export default function ChatPage() {
         onNewChat={handleNewChat}
         onRefresh={loadChats}
       />
-      <ChatInterface chatId={currentChatId} onRefreshChats={loadChats} />
+      <ChatInterface 
+        chatId={currentChatId} 
+        chats={chats}
+        onRefreshChats={loadChats} 
+      />
     </div>
   );
 }

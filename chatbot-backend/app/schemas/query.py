@@ -6,6 +6,8 @@ class QueryRequest(BaseModel):
     chat_id: Optional[int] = None
     file_ids: Optional[List[int]] = None
     stream: bool = False
+    space_id: Optional[str] = "general"
+    model: Optional[str] = None
 
 class QueryResponse(BaseModel):
     answer: str

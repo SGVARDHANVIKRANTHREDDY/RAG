@@ -13,7 +13,8 @@ from sentence_transformers import SentenceTransformer
 import faiss
 
 import openai
-from app.core.config import settings
+from app.core.config import settings, get_space
+from app.db.session import AsyncSessionLocal
 from app.models.file import File
 from app.models.message import Message
 
@@ -120,33 +121,29 @@ def generate_embeddings(texts: List[str]) -> np.ndarray:
     return embeddings.astype('float32')
 
 
-async def retrieve_and_query(
+async def build_rag_context(
     query: str,
     user_id: int,
     file_ids: Optional[List[int]],
-    db: AsyncSession
 ) -> Tuple[str, List[dict]]:
-    """Retrieve relevant chunks and query LLM for an answer."""
     index_dir = Path(settings.UPLOAD_DIR) / str(user_id)
     index_path = index_dir / "faiss_index.bin"
     metadata_path = index_dir / "metadata.json"
 
     if not index_path.exists():
-        return "No documents uploaded yet. Please upload a document first.", []
+        return "", []
 
     index = faiss.read_index(str(index_path))
     with open(metadata_path, 'r') as f:
         metadata = json.load(f)
 
     query_embedding = generate_embeddings([query])
-
-    # Search with extra results when filtering by file_ids
     search_k = min(
         settings.TOP_K_RETRIEVAL * 3 if file_ids else settings.TOP_K_RETRIEVAL,
         index.ntotal
     )
     if search_k == 0:
-        return "No documents indexed yet.", []
+        return "", []
 
     distances, indices = index.search(query_embedding, search_k)
 
@@ -168,34 +165,48 @@ async def retrieve_and_query(
             })
 
     if not relevant_chunks:
-        return "No relevant content found in the selected documents.", []
+        return "", []
 
     context = "\n\n".join(relevant_chunks)
-    prompt = f"""Answer the question based on the following context. If the answer is not in the context, say "I don't have enough information to answer that."
+    return context, sources
 
-Context:
-{context}
 
-Question: {query}
+async def retrieve_and_query(
+    query: str,
+    user_id: int,
+    file_ids: Optional[List[int]],
+    db: AsyncSession,
+    space_id: Optional[str] = None,
+    model_override: Optional[str] = None,
+) -> Tuple[str, List[dict]]:
+    space = get_space(space_id)
+    context = ""
+    sources = []
 
-Answer:"""
+    if space.use_rag:
+        context, sources = await build_rag_context(query, user_id, file_ids)
+        if space.id == "docs_only" and not context:
+            return "No documents uploaded or no relevant content found.", []
 
+    messages = [{"role": "system", "content": space.system_prompt}]
+    if context and space.use_rag:
+        messages.append({"role": "system", "content": f"Context:\n{context}"})
+    messages.append({"role": "user", "content": query})
+
+    model_name = model_override or space.default_model
     client = get_openai_client()
+
     if client is None:
-        # No API key — return retrieved context as the answer
         return (
             f"**[Demo Mode — No OpenAI API key configured]**\n\n"
             f"Here are the most relevant passages from your documents:\n\n"
-            f"---\n\n{relevant_chunks[0][:800]}"
+            f"---\n\n{context[:800] if context else 'No content found.'}"
         ), sources
 
     try:
         response = client.chat.completions.create(
-            model=settings.LLM_MODEL,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that answers questions based on provided documents."},
-                {"role": "user", "content": prompt}
-            ],
+            model=model_name,
+            messages=messages,
             temperature=settings.LLM_TEMPERATURE,
             max_tokens=settings.MAX_TOKENS
         )
@@ -206,79 +217,56 @@ Answer:"""
     return answer, sources
 
 
-async def stream_rag_query(query: str, user_id: int, chat_id: int, db: AsyncSession):
-    """Stream RAG query results using SSE format."""
-    index_dir = Path(settings.UPLOAD_DIR) / str(user_id)
-    index_path = index_dir / "faiss_index.bin"
-    metadata_path = index_dir / "metadata.json"
-
-    if not index_path.exists():
-        yield f"data: {json.dumps({'token': 'No documents uploaded yet. Please upload a document first.'})}\n\n"
-        yield "data: [DONE]\n\n"
-        return
-
-    index = faiss.read_index(str(index_path))
-    with open(metadata_path, 'r') as f:
-        metadata = json.load(f)
-
-    query_embedding = generate_embeddings([query])
-    k = min(settings.TOP_K_RETRIEVAL, index.ntotal)
-    if k == 0:
-        yield f"data: {json.dumps({'token': 'No documents indexed yet.'})}\n\n"
-        yield "data: [DONE]\n\n"
-        return
-
-    distances, indices = index.search(query_embedding, k)
-
-    relevant_chunks = []
+async def stream_rag_query(query: str, user_id: int, chat_id: int, space_id: Optional[str] = None, model_override: Optional[str] = None):
+    space = get_space(space_id)
+    context = ""
     sources = []
-    for idx in indices[0]:
-        if 0 <= idx < len(metadata):
-            chunk_meta = metadata[idx]
-            relevant_chunks.append(chunk_meta["text"])
-            sources.append({
-                "filename": chunk_meta["filename"],
-                "chunk": chunk_meta["chunk_index"]
-            })
 
-    context = "\n\n".join(relevant_chunks)
-    prompt = f"""Answer based on the provided context. If the answer is not in the context, say "I don't know."
+    if space.use_rag:
+        context, sources = await build_rag_context(query, user_id, file_ids=None)
+        if space.id == "docs_only" and not context:
+            error_msg = 'No documents uploaded or no relevant content found.'
+            yield f"data: {json.dumps({'token': error_msg})}\n\n"
+            yield "data: [DONE]\n\n"
+            
+            async with AsyncSessionLocal() as session:
+                assistant_message = Message(chat_id=chat_id, role="assistant", content=error_msg, sources=sources)
+                session.add(assistant_message)
+                await session.commit()
+            return
 
-Context:
-{context}
+    messages = [{"role": "system", "content": space.system_prompt}]
+    if context and space.use_rag:
+        messages.append({"role": "system", "content": f"Context:\n{context}"})
+    messages.append({"role": "user", "content": query})
 
-Question: {query}
-
-Answer:"""
-
+    model_name = model_override or space.default_model
     client = get_openai_client()
+    
     if client is None:
-        # No API key — return context in demo mode
         fallback = (
             f"**[Demo Mode — No OpenAI API key configured]**\n\n"
             f"Here are the most relevant passages:\n\n---\n\n"
-            f"{relevant_chunks[0][:800] if relevant_chunks else 'No content found.'}"
+            f"{context[:800] if context else 'No content found.'}"
         )
         yield f"data: {json.dumps({'token': fallback})}\n\n"
         yield f"data: {json.dumps({'sources': sources})}\n\n"
         yield "data: [DONE]\n\n"
 
-        assistant_message = Message(
-            chat_id=chat_id, role="assistant",
-            content=fallback, sources=sources
-        )
-        db.add(assistant_message)
-        await db.commit()
+        async with AsyncSessionLocal() as session:
+            assistant_message = Message(
+                chat_id=chat_id, role="assistant",
+                content=fallback, sources=sources
+            )
+            session.add(assistant_message)
+            await session.commit()
         return
 
     full_response = ""
     try:
         response = client.chat.completions.create(
-            model=settings.LLM_MODEL,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt}
-            ],
+            model=model_name,
+            messages=messages,
             temperature=settings.LLM_TEMPERATURE,
             max_tokens=settings.MAX_TOKENS,
             stream=True
@@ -293,12 +281,13 @@ Answer:"""
         yield f"data: {json.dumps({'sources': sources})}\n\n"
         yield "data: [DONE]\n\n"
 
-        assistant_message = Message(
-            chat_id=chat_id, role="assistant",
-            content=full_response, sources=sources
-        )
-        db.add(assistant_message)
-        await db.commit()
+        async with AsyncSessionLocal() as session:
+            assistant_message = Message(
+                chat_id=chat_id, role="assistant",
+                content=full_response, sources=sources
+            )
+            session.add(assistant_message)
+            await session.commit()
 
     except Exception as e:
         yield f"data: {json.dumps({'error': str(e)})}\n\n"

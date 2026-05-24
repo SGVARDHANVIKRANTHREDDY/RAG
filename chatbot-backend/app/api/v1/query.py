@@ -12,7 +12,7 @@ from app.services.rag import retrieve_and_query, stream_rag_query
 
 router = APIRouter()
 
-@router.post("/", response_model=QueryResponse)
+@router.post("", response_model=QueryResponse)
 async def query_documents(
     query_data: QueryRequest,
     current_user: User = Depends(get_current_user),
@@ -23,8 +23,11 @@ async def query_documents(
         chat = result.scalar_one_or_none()
         if not chat or chat.user_id != current_user.id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+        if query_data.space_id and chat.space_id != query_data.space_id:
+            chat.space_id = query_data.space_id
+            await db.commit()
     else:
-        new_chat = Chat(user_id=current_user.id, title=query_data.query[:50])
+        new_chat = Chat(user_id=current_user.id, title=query_data.query[:50], space_id=query_data.space_id)
         db.add(new_chat)
         await db.commit()
         await db.refresh(new_chat)
@@ -42,7 +45,9 @@ async def query_documents(
         query=query_data.query,
         user_id=current_user.id,
         file_ids=query_data.file_ids,
-        db=db
+        db=db,
+        space_id=query_data.space_id,
+        model_override=query_data.model
     )
     
     assistant_message = Message(
@@ -66,6 +71,8 @@ async def query_documents(
 async def stream_query(
     query: str,
     chat_id: int = None,
+    space_id: str = "general",
+    model: str = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -74,8 +81,11 @@ async def stream_query(
         chat = result.scalar_one_or_none()
         if not chat or chat.user_id != current_user.id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat not found")
+        if space_id and chat.space_id != space_id:
+            chat.space_id = space_id
+            await db.commit()
     else:
-        new_chat = Chat(user_id=current_user.id, title=query[:50])
+        new_chat = Chat(user_id=current_user.id, title=query[:50], space_id=space_id)
         db.add(new_chat)
         await db.commit()
         await db.refresh(new_chat)
@@ -86,6 +96,6 @@ async def stream_query(
     await db.commit()
     
     return StreamingResponse(
-        stream_rag_query(query, current_user.id, chat_id, db),
+        stream_rag_query(query, current_user.id, chat_id, space_id, model),
         media_type="text/event-stream"
     )

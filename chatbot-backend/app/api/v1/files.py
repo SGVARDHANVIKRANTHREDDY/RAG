@@ -52,7 +52,7 @@ async def upload_file(
     
     return new_file
 
-@router.get("/", response_model=List[FileListResponse])
+@router.get("", response_model=List[FileListResponse])
 async def list_files(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)

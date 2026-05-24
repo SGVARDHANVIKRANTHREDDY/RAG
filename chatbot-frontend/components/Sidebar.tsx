@@ -7,6 +7,7 @@ interface Chat {
   id: number;
   title: string;
   created_at: string;
+  space_id?: string;
 }
 
 export default function Sidebar({

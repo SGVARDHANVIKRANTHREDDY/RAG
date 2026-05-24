@@ -4,11 +4,13 @@ from typing import List, Optional
 
 class ChatCreate(BaseModel):
     title: Optional[str] = "New Chat"
+    space_id: Optional[str] = "general"
 
 class ChatResponse(BaseModel):
     id: int
     user_id: int
     title: str
+    space_id: Optional[str]
     created_at: datetime
     
     class Config:

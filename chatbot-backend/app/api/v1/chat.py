@@ -11,19 +11,19 @@ from app.core.security import get_current_user
 
 router = APIRouter()
 
-@router.post("/", response_model=ChatResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ChatResponse, status_code=status.HTTP_201_CREATED)
 async def create_chat(
     chat_data: ChatCreate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    new_chat = Chat(user_id=current_user.id, title=chat_data.title)
+    new_chat = Chat(user_id=current_user.id, title=chat_data.title, space_id=chat_data.space_id)
     db.add(new_chat)
     await db.commit()
     await db.refresh(new_chat)
     return new_chat
 
-@router.get("/", response_model=List[ChatResponse])
+@router.get("", response_model=List[ChatResponse])
 async def list_chats(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
